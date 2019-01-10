@@ -28,7 +28,7 @@ LIB	= libgeneric.a
 OBJS	= string.o
 
 ifeq ($(CONFIG_LZMA),ON)
-OBJS   += LzmaDecode.o
+OBJS   += LzmaDecode.o LzmaWrapper.o
 endif
 
 $(LIB):	.depend $(OBJS)

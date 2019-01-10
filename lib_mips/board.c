@@ -32,13 +32,12 @@
 #include <rt_mmap.h>
 #include <spi_api.h>
 #include <nand_api.h>
+#include "LzmaWrapper.h"
 
 DECLARE_GLOBAL_DATA_PTR;
 #undef DEBUG
 
 #define SDRAM_CFG1_REG RALINK_SYSCTL_BASE + 0x0304
-
-int modifies= 0;
 
 #ifdef DEBUG
    #define DATE      "05/25/2006"
@@ -109,6 +108,41 @@ static int auto_load = 0;
 unsigned long mips_cpu_feq;
 unsigned long mips_bus_feq;
 
+
+/*
+ * Begin and End of memory area for malloc(), and current "brk"
+ */
+static ulong mem_malloc_start;
+static ulong mem_malloc_end;
+static ulong mem_malloc_brk;
+
+/*
+ * The Malloc area is immediately below the monitor copy in DRAM
+ */
+static void mem_malloc_init(ulong dest_addr)
+{
+	/* ulong dest_addr = BOOTSTRAP_CFG_MONITOR_BASE + gd->reloc_off; */
+	mem_malloc_end = dest_addr;
+	mem_malloc_start = dest_addr - TOTAL_MALLOC_LEN;
+	mem_malloc_brk = mem_malloc_start;
+
+	memset((void *)mem_malloc_start, 0, mem_malloc_end - mem_malloc_start);
+}
+
+void *malloc(unsigned int size)
+{
+	if (size < (mem_malloc_end - mem_malloc_start)) {
+		mem_malloc_start += size;
+		return (void *)(mem_malloc_start - size);
+	}
+
+	return NULL;
+}
+
+void free(void *src)
+{
+	return;
+}
 
 /*
  * Begin and End of memory area for malloc(), and current "brk"
@@ -433,7 +467,7 @@ __attribute__((nomips16)) void board_init_f(ulong bootflag)
 	
 	flush_cache(addr,(unsigned long)&uboot_end_data - CFG_MONITOR_BASE);
 	
-	serial_puts("r...\n");
+	serial_puts("mtk_uboot_bootstrap by zhaoxiaowei\n");
 #if defined(CFG_RUN_CODE_IN_RAM)
 	/* 
 	 * tricky: relocate code to original TEXT_BASE
@@ -445,27 +479,6 @@ __attribute__((nomips16)) void board_init_f(ulong bootflag)
 #endif
 
 	/* NOTREACHED - relocate_code() does not return */
-}
-
-#define SEL_LOAD_LINUX_WRITE_FLASH_BY_SERIAL 0
-#define SEL_LOAD_LINUX_SDRAM            1
-#define SEL_LOAD_LINUX_WRITE_FLASH      2
-#define SEL_BOOT_FLASH                  3
-#define SEL_ENTER_CLI                   4
-#define SEL_LOAD_BOOT_WRITE_FLASH_BY_SERIAL 7
-#define SEL_LOAD_BOOT_SDRAM             8
-#define SEL_LOAD_BOOT_WRITE_FLASH       9
-
-void trigger_hw_reset(void)
-{
-#ifdef GPIO14_RESET_MODE
-        //set GPIO14 as output to trigger hw reset circuit
-        RALINK_REG(RT2880_REG_PIODIR)|=1<<14; //output mode
-
-        RALINK_REG(RT2880_REG_PIODATA)|=1<<14; //pull high
-	udelay(100);
-        RALINK_REG(RT2880_REG_PIODATA)&=~(1<<14); //pull low
-#endif
 }
 
 /************************************************************************
@@ -481,12 +494,54 @@ void trigger_hw_reset(void)
 gd_t gd_data;
  
 __attribute__((nomips16)) void board_init_r (gd_t *id, ulong dest_addr)
-{	
-	extern void serial_puts (const char *s);
-	//while(1)
+{
+	int i;
+	ulong addr;
+	ulong data, len;
+	image_header_t header;
+	image_header_t *hdr = &header;
+	unsigned int destLen;
+	int (*fn)(int);
+	
+	/* Initialize malloc() area */
+	mem_malloc_init(dest_addr);
+	
+	addr = (ulong)((char *)(CFG_MONITOR_BASE + ((ulong)&uboot_end_data - dest_addr)));
+	memmove(&header, (char *)addr, sizeof(image_header_t));
+
+	if (ntohl(hdr->ih_magic) != IH_MAGIC)
 	{
-		serial_puts("idle...\n");
+		serial_puts("bad magic!\n");
+		hang();
 	}
+
+	data = addr + sizeof(image_header_t);
+	len = ntohl(hdr->ih_size);
+
+	/*
+	 * If we've got less than 4 MB of malloc() space,
+	 * use slower decompression algorithm which requires
+	 * at most 2300 KB of memory.
+	 */
+	destLen = 0x0;
+	
+	serial_puts("delzma second bootloader\n");
+
+#ifdef CONFIG_LZMA
+	i = lzma_inflate((unsigned char *)data, len, (unsigned char*)ntohl(hdr->ih_load), (int *)&destLen);
+
+	if (i != LZMA_RESULT_OK)
+	{
+		serial_puts("lzma failed!\n");
+		hang();
+	}
+#endif
+
+	fn = (void *)ntohl(hdr->ih_load);
+	
+	serial_puts("starting second bootloader\n");
+
+	(*fn)(gd->ram_size);
 
 	hang();
 	/* NOTREACHED - no way out of command loop except booting */
@@ -495,7 +550,7 @@ __attribute__((nomips16)) void board_init_r (gd_t *id, ulong dest_addr)
 
 void hang (void)
 {
-	//puts ("### ERROR ### Please RESET the board ###\n");
+	serial_puts ("### ERROR ### Please RESET the board ###\n");
 	for (;;);
 }
 
