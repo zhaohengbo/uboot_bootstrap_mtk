@@ -538,6 +538,7 @@ __attribute__((nomips16)) void board_init_r (gd_t *id, ulong dest_addr)
 #endif
 
 	fn = (void *)ntohl(hdr->ih_load);
+	flush_cache((ulong)ntohl(hdr->ih_load), (ulong)destLen);
 	
 	serial_puts("starting second bootloader\n");
 
