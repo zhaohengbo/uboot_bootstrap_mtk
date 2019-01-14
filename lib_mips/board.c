@@ -542,7 +542,7 @@ __attribute__((nomips16)) void board_init_r (gd_t *id, ulong dest_addr)
 	
 	serial_puts("starting second bootloader\n");
 
-	(*fn)(gd->ram_size);
+	(*fn)(id->ram_size);
 
 	hang();
 	/* NOTREACHED - no way out of command loop except booting */
